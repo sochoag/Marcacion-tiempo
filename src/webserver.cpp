@@ -2,8 +2,9 @@
 #include "utils.h"
 #include <FS.h>
 #include <SPIFFS.h>
-#include <vector>     // Necesario para ordenar (el JS lo hará, pero buena práctica si el ESP32 pre-procesa)
-#include <algorithm>  // Necesario para std::sort
+#include <vector>
+#include <algorithm>
+#include <ArduinoJson.h> // Necesario para parsear JSON
 
 const char* ssid = "sochoag";       // ¡Reemplaza con tu SSID de WiFi!
 const char* password = "sochoagu"; // ¡Reemplaza con tu contraseña de WiFi!
@@ -12,6 +13,14 @@ AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 
 std::map<String, Tarjeta>* globalTarjetasActivasPtr;
+
+// Declaración forward de la función para eliminar (si no está ya en Tarjeta.h o utils.h)
+// Esto asume que main.cpp tendrá una función como 'removeCardByUid'
+// o que la lógica de eliminación se hará directamente aquí en webserver.cpp
+// Si la lógica está en main.cpp, necesitarás una referencia a la función.
+// Para simplificar, la haremos aquí mismo ya que tenemos el puntero al mapa.
+void removeCardFromMap(const String& uid_to_remove);
+
 
 void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
   switch (type) {
@@ -23,7 +32,39 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
       Serial.printf("Cliente WebSocket desconectado #%u\n", client->id());
       break;
     case WS_EVT_DATA:
-      Serial.printf("Mensaje recibido de cliente #%u: %s\n", client->id(), (char*)data);
+      // Manejar datos recibidos del cliente
+      {
+        AwsFrameInfo *info = (AwsFrameInfo*)arg;
+        if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
+          data[len] = 0; // Asegurarse de que sea un string nulo
+          String message = (char*)data;
+          Serial.printf("Mensaje recibido de cliente #%u: %s\n", client->id(), message.c_str());
+
+          // Parsear el JSON recibido
+          StaticJsonDocument<200> doc; // Tamaño suficiente para {"action": "delete", "uid": "B1616C803"}
+          DeserializationError error = deserializeJson(doc, message);
+
+          if (error) {
+            Serial.print(F("deserializeJson() failed: "));
+            Serial.println(error.f_str());
+            return;
+          }
+
+          const char* action = doc["action"];
+          if (action && strcmp(action, "delete") == 0) {
+            const char* uidToDelete = doc["uid"];
+            if (uidToDelete) {
+              Serial.printf("Solicitud de eliminación de tarjeta: %s\n", uidToDelete);
+              removeCardFromMap(uidToDelete); // Eliminar la tarjeta
+              sendWebSocketData(); // Enviar actualización a todos los clientes después de eliminar
+            } else {
+              Serial.println("UID de tarjeta no especificado para la acción de eliminación.");
+            }
+          } else {
+            Serial.println("Acción desconocida en el mensaje WebSocket.");
+          }
+        }
+      }
       break;
     case WS_EVT_PONG:
     case WS_EVT_ERROR:
@@ -74,6 +115,17 @@ void initWebServer(std::map<String, Tarjeta>& tarjetas) {
   }
 }
 
+// Función para eliminar una tarjeta del mapa
+void removeCardFromMap(const String& uid_to_remove) {
+    auto it = globalTarjetasActivasPtr->find(uid_to_remove);
+    if (it != globalTarjetasActivasPtr->end()) {
+        globalTarjetasActivasPtr->erase(it);
+        Serial.printf("Tarjeta %s eliminada del mapa.\n", uid_to_remove.c_str());
+    } else {
+        Serial.printf("Error: Tarjeta %s no encontrada para eliminar.\n", uid_to_remove.c_str());
+    }
+}
+
 // Función para enviar los datos de las tarjetas a todos los clientes WebSocket conectados
 void sendWebSocketData() {
   String jsonString = "{"; // Ahora enviamos un objeto JSON principal
@@ -83,13 +135,11 @@ void sendWebSocketData() {
   if (globalTarjetasActivasPtr->empty()) {
     jsonString += "]"; // Cierra el array si está vacío
   } else {
-    // Creamos un vector de punteros a Tarjeta para poder ordenarlos
     std::vector<const Tarjeta*> sortedTarjetas;
     for (auto const& pair : *globalTarjetasActivasPtr) {
       sortedTarjetas.push_back(&pair.second);
     }
 
-    // Ordenar el vector por ID de grupo
     std::sort(sortedTarjetas.begin(), sortedTarjetas.end(), [](const Tarjeta* a, const Tarjeta* b) {
       return a->getGroupId() < b->getGroupId();
     });

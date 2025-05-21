@@ -8,7 +8,7 @@
         body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
         h1 { color: #0056b3; text-align: center; }
         table { width: 100%; border-collapse: collapse; margin-top: 20px; background-color: #fff; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-        th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #ddd; }
+        th, td { text-align: center; padding: 12px 15px; border-bottom: 1px solid #ddd; }
         th { background-color: #007bff; color: white; }
         tr:nth-child(even) { background-color: #f2f2f2; }
         tr:hover { background-color: #ddd; }
@@ -16,16 +16,61 @@
 
         /* Estilo para tarjetas inactivas */
         .inactive-card {
-            background-color: #7aaac6 !important; /* Un gris muy claro */
-            color: #000; /* Un gris más oscuro para el texto */
-            font-style: italic; /* Opcional: texto en cursiva */
+            background-color: #7aaac6 !important;
+            color: #000;
+            font-style: italic;
         }
         .inactive-card:hover {
             background-color: #dee2e6; /* Un gris un poco más oscuro al pasar el mouse */
         }
-        /* Asegura que el color de texto de las celdas se herede */
         .inactive-card td {
             color: inherit;
+        }
+
+        /* Estilo para tarjetas históricas (liberadas) */
+        .historical-card {
+            background-color: #e0e0e0 !important; /* Un gris más claro para diferenciarlas */
+            color: #666;
+            font-style: italic;
+            opacity: 0.8;
+        }
+        .historical-card:hover {
+            background-color: #d0d0d0;
+        }
+
+        /* Estilo del botón de eliminar */
+        .delete-btn {
+            background-color: #dc3545; /* Rojo */
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: background-color 0.3s ease;
+            margin-right: 5px; /* Espacio entre botones */
+        }
+        .delete-btn:hover {
+            background-color: #c82333; /* Rojo más oscuro al pasar el mouse */
+        }
+
+        /* Estilo del botón de liberar */
+        .liberate-btn {
+            background-color: #28a745; /* Verde */
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: background-color 0.3s ease;
+        }
+        .liberate-btn:hover {
+            background-color: #218838; /* Verde más oscuro al pasar el mouse */
+        }
+        .liberate-btn:disabled {
+            background-color: #6c757d; /* Gris para deshabilitado */
+            cursor: not-allowed;
         }
 
         @media (max-width: 600px) {
@@ -34,6 +79,14 @@
             tr { border: 1px solid #ccc; margin-bottom: 10px; }
             td { border: none; border-bottom: 1px solid #eee; position: relative; padding-left: 50%; text-align: right; }
             td:before { position: absolute; top: 6px; left: 6px; width: 45%; padding-right: 10px; white-space: nowrap; content: attr(data-label); font-weight: bold; text-align: left; }
+            
+            td[data-label="Acciones"] {
+                text-align: left;
+                padding-left: 15px;
+            }
+            td[data-label="Acciones"]:before {
+                content: '';
+            }
         }
     </style>
 </head>
@@ -46,6 +99,7 @@
                 <th>UID Tarjeta</th>
                 <th>Grupo</th>
                 <th>Tiempo Total</th>
+                <th>Acciones</th>
             </tr>
         </thead>
         <tbody id="cardTableBody">
@@ -55,13 +109,14 @@
     <script>
         var gateway = `ws://${window.location.hostname}/ws`;
         var websocket;
-        var tarjetasData = []; // Almacenará los datos de las tarjetas
         
-        // Variables para la sincronización de tiempo
+        // tarjetasData ahora es un ARRAY para mantener múltiples entradas para el mismo UID
+        // Cada objeto dentro del array representará una "sesión" de una tarjeta
+        var tarjetasData = []; 
+        
         var lastEsp32Millis = 0;
-        var lastClientTimestamp = 0; // Date.now() cuando se recibió lastEsp32Millis
+        var lastClientTimestamp = 0;
 
-        // Función auxiliar para formatear milisegundos a MM:SS
         function formatMillisToMMSS(millis) {
             if (millis < 0) millis = 0;
             let seconds = Math.floor(millis / 1000);
@@ -95,72 +150,182 @@
             try {
                 const receivedData = JSON.parse(event.data);
                 
-                // Sincronizar timestamps
                 lastEsp32Millis = receivedData.timestampEsp32;
                 lastClientTimestamp = Date.now();
                 
-                // Actualizar tarjetasData
-                const updatedTarjetasMap = new Map();
+                // Paso 1: Marcar todas las tarjetas activas LOCALES como NO presentes en el ESP32
+                // Esto es para detectar cuáles se eliminaron del ESP32 o si son nuevas sesiones
+                tarjetasData.forEach(card => {
+                    // Solo marcar si no fue liberada o eliminada localmente (ya que esas persisten intencionalmente)
+                    if (!card.isLocallyLiberated && !card.isLocallyDeleted) { 
+                        card.isPresentInEsp32 = false;
+                    }
+                });
+
+                // Paso 2: Actualizar o añadir tarjetas de la respuesta del ESP32
                 if (receivedData.tarjetas) {
-                    receivedData.tarjetas.forEach(card => {
-                        updatedTarjetasMap.set(card.uid, card);
+                    receivedData.tarjetas.forEach(receivedCard => {
+                        let found = false;
+                        // Buscar una entrada existente que coincida por UID y Grupo
+                        for (let i = 0; i < tarjetasData.length; i++) {
+                            const localCard = tarjetasData[i];
+                            if (localCard.uid === receivedCard.uid && localCard.grupo === receivedCard.grupo) {
+                                // Actualizar la tarjeta existente
+                                Object.assign(localCard, receivedCard); // Copia todas las propiedades
+                                localCard.isPresentInEsp32 = true; // Está presente en la respuesta del ESP32
+                                localCard.isLocallyLiberated = false; // Ya no está "liberada" localmente (se re-activó)
+                                localCard.isLocallyDeleted = false; // Ya no está "eliminada" localmente
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            // Si no se encontró, es una nueva sesión (o una tarjeta que fue liberada y re-leída)
+                            receivedCard.isPresentInEsp32 = true;
+                            receivedCard.isLocallyLiberated = false;
+                            receivedCard.isLocallyDeleted = false;
+                            tarjetasData.push(receivedCard);
+                        }
                     });
                 }
                 
-                tarjetasData = Array.from(updatedTarjetasMap.values());
-                
-                updateTableDisplay(); // Renderizar la tabla con los nuevos datos
+                // Paso 3: Filtrar el array para eliminar entradas que el ESP32 ya no reporta
+                // y que NO fueron marcadas para persistir localmente (liberadas/eliminadas históricamente)
+                tarjetasData = tarjetasData.filter(card => 
+                    card.isPresentInEsp32 || card.isLocallyLiberated || card.isLocallyDeleted
+                );
+
+                updateTableDisplay();
             } catch (e) {
                 console.error("Error al parsear JSON:", e);
             }
         }
 
-        // Función para actualizar la visualización de la tabla HTML
         function updateTableDisplay() {
             const tableBody = document.getElementById('cardTableBody');
-            tableBody.innerHTML = ''; // Limpiar la tabla actual
+            tableBody.innerHTML = '';
 
-            if (tarjetasData.length === 0) {
-                tableBody.innerHTML = '<tr><td colspan="3" style="text-align: center;">No hay tarjetas activas.</td></tr>';
+            // Ordenar por grupo para consistencia visual
+            const sortedTarjetas = [...tarjetasData].sort((a, b) => {
+                const groupA = parseInt(a.grupo.replace('Grupo ', ''));
+                const groupB = parseInt(b.grupo.replace('Grupo ', ''));
+                // Si los grupos son iguales, ordenar por UID (o algún otro identificador secundario)
+                if (groupA === groupB) {
+                    return a.uid.localeCompare(b.uid);
+                }
+                return groupA - groupB;
+            });
+
+
+            if (sortedTarjetas.length === 0) {
+                tableBody.innerHTML = '<tr><td colspan="4" style="text-align: center;">No hay tarjetas en el historial.</td></tr>';
                 return;
             }
 
-            tarjetasData.forEach(tarjeta => {
+            sortedTarjetas.forEach((tarjeta, index) => {
                 const row = tableBody.insertRow();
-                // AQUI: Añadimos la clase 'inactive-card' si la tarjeta no está activa
-                if (!tarjeta.isActive) {
+                // Si la tarjeta no está activa O SI HA SIDO LIBERADA LOCALMENTE O ELIMINADA LOCALMENTE
+                if (!tarjeta.isActive) { // Siempre inactiva si el ESP32 la marcó así
                     row.classList.add('inactive-card');
                 }
+                if (tarjeta.isLocallyLiberated) { // Solo para "Liberadas" que persisten
+                    row.classList.add('historical-card'); 
+                }
+
 
                 row.insertCell().setAttribute('data-label', 'UID Tarjeta');
                 row.cells[0].innerText = tarjeta.uid;
                 row.insertCell().setAttribute('data-label', 'Grupo');
                 row.cells[1].innerText = tarjeta.grupo;
-                const timeCell = row.insertCell(); // Celda para el tiempo
+                
+                const timeCell = row.insertCell();
                 timeCell.setAttribute('data-label', 'Tiempo Total');
-                timeCell.id = `time-${tarjeta.uid}`; // Asignar un ID para futuras actualizaciones
+                // ID único por UID y Grupo para evitar conflictos si hay el mismo UID en diferentes grupos
+                timeCell.id = `time-${tarjeta.uid}-${tarjeta.grupo.replace('Grupo ', '')}`; 
 
-                // Mostrar el tiempo inicial basado en si está activa o no
-                if (tarjeta.isActive) {
-                    // Guardar startTime para el cálculo continuo
+                // El tiempo solo se actualiza si está activa Y no ha sido liberada localmente
+                if (tarjeta.isActive && !tarjeta.isLocallyLiberated) { 
                     timeCell.dataset.startTime = tarjeta.startTime;
                     timeCell.dataset.isActive = 'true';
-                    // Calcular y mostrar el tiempo inicial
                     const offset = lastClientTimestamp - lastEsp32Millis;
                     const elapsedMillis = Date.now() - (tarjeta.startTime + offset);
                     timeCell.innerText = formatMillisToMMSS(elapsedMillis);
                 } else {
                     timeCell.dataset.isActive = 'false';
-                    timeCell.innerText = tarjeta.tiempoTotalFormatted; // Mostrar el tiempo finalizado
+                    timeCell.innerText = tarjeta.tiempoTotalFormatted;
                 }
+
+                // Celda para acciones
+                const actionsCell = row.insertCell();
+                actionsCell.setAttribute('data-label', 'Acciones');
+
+                // Botón Eliminar
+                const deleteButton = document.createElement('button');
+                deleteButton.classList.add('delete-btn');
+                deleteButton.innerText = 'Eliminar';
+                deleteButton.dataset.uid = tarjeta.uid;
+                deleteButton.dataset.grupo = tarjeta.grupo; // Pasar el grupo para identificar la sesión
+                deleteButton.onclick = function() {
+                    if (confirm(`¿Estás seguro de que quieres eliminar la sesión de la tarjeta ${this.dataset.uid} del ${this.dataset.grupo} de la tabla?`)) {
+                        // Envía la acción "delete" al ESP32 para eliminarla del microcontrolador
+                        sendCardAction("delete", this.dataset.uid);
+                        
+                        // Eliminar el registro del array local inmediatamente
+                        tarjetasData = tarjetasData.filter(c => 
+                            !(c.uid === this.dataset.uid && c.grupo === this.dataset.grupo)
+                        );
+                        updateTableDisplay(); // Volver a renderizar la tabla sin este registro
+                    }
+                };
+                // El botón eliminar está disponible si NO ha sido liberada localmente
+                deleteButton.disabled = tarjeta.isLocallyLiberated || false; 
+                actionsCell.appendChild(deleteButton);
+
+                // Botón Liberar
+                const liberateButton = document.createElement('button');
+                liberateButton.classList.add('liberate-btn');
+                liberateButton.innerText = 'Liberar';
+                liberateButton.dataset.uid = tarjeta.uid;
+                liberateButton.dataset.grupo = tarjeta.grupo; // Pasar el grupo para identificar la sesión
+                liberateButton.onclick = function() {
+                    if (confirm(`¿Estás seguro de que quieres liberar la tarjeta ${this.dataset.uid} del ${this.dataset.grupo} para un nuevo uso? Su registro actual permanecerá visible como historial.`)) {
+                        sendCardAction("delete", this.dataset.uid); // <--- SIEMPRE se envía "delete" al ESP32
+                        
+                        // Marca la tarjeta localmente como "liberada" para deshabilitar botones y cambiar estilo
+                        const cardIndex = tarjetasData.findIndex(c => c.uid === this.dataset.uid && c.grupo === this.dataset.grupo);
+                        if (cardIndex !== -1) {
+                            tarjetasData[cardIndex].isLocallyLiberated = true;
+                            tarjetasData[cardIndex].isActive = false; // Asegurar que no esté activa visualmente
+                        }
+                        updateTableDisplay(); // Volver a renderizar para actualizar el estado del botón
+                    }
+                };
+                // El botón "Liberar" se deshabilita si la tarjeta está activa o si ya fue liberada localmente
+                liberateButton.disabled = tarjeta.isActive || tarjeta.isLocallyLiberated; 
+                actionsCell.appendChild(liberateButton);
             });
+        }
+
+        // Función unificada para enviar acciones al ESP32
+        function sendCardAction(action, uid) {
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                const message = JSON.stringify({ action: action, uid: uid });
+                websocket.send(message);
+                console.log(`Solicitud de acción "${action}" enviada para UID: ${uid}`);
+            } else {
+                console.error("WebSocket no está conectado o listo para enviar.");
+                document.getElementById('status').innerText = `Error: WebSocket no conectado. No se pudo ${action}.`;
+            }
         }
 
         // Temporizador para actualizar los tiempos de las tarjetas activas cada 1 segundo
         setInterval(() => {
+            // Recorrer el array de tarjetasData
             tarjetasData.forEach(tarjeta => {
-                if (tarjeta.isActive) {
-                    const timeCell = document.getElementById(`time-${tarjeta.uid}`);
+                // Solo actualizar si la tarjeta está activa Y no ha sido liberada localmente
+                if (tarjeta.isActive && !tarjeta.isLocallyLiberated) { 
+                    // Asegurarse de que el ID del elemento coincida con el generado en updateTableDisplay
+                    const timeCell = document.getElementById(`time-${tarjeta.uid}-${tarjeta.grupo.replace('Grupo ', '')}`);
                     if (timeCell && timeCell.dataset.isActive === 'true') {
                         const startTimeEsp32 = parseInt(timeCell.dataset.startTime);
                         
@@ -171,9 +336,8 @@
                     }
                 }
             });
-        }, 100); // Actualizar cada 1000 milisegundos (0.1 segundo)
+        }, 1000);
 
-        // Inicializar la conexión WebSocket al cargar la página
         window.addEventListener('load', initWebSocket, false);
     </script>
 </body>
