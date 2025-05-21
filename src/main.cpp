@@ -47,36 +47,29 @@ void loop() {
   printf("%s\n", current_uid.c_str());
 
   auto it = tarjetasActivas.find(current_uid);
-  bool dataUpdated = false;
-
+  
   if (it == tarjetasActivas.end()) {
     // Si es una tarjeta nueva, asignamos el siguiente ID de grupo
     printf("Nueva tarjeta cargada: %s con Grupo %d\n", current_uid.c_str(), nextGroupId);
     tarjetasActivas.insert({current_uid, Tarjeta(current_uid, millis(), nextGroupId)});
     nextGroupId++; // Incrementamos el contador para el próximo grupo
     printf("Total de tarjetas activas: %d\n", tarjetasActivas.size());
-    dataUpdated = true;
   } else {
     // Si la tarjeta ya existe
     if (it->second.isActive()) {
-      Serial.printf("Tarjeta activa encontrada: %s, Grupo %d\n", it->second.getUid().c_str(), it->second.getGroupId());
+      Serial.printf("Tarjeta activa encontrada: %s, Grupo %d. Registrando salida.\n", it->second.getUid().c_str(), it->second.getGroupId());
       it->second.setEndTime(millis());
-      Serial.printf("Tiempo total: %s\n", it->second.getTotalTime().c_str());
-      dataUpdated = true;
+      Serial.printf("Tiempo total final: %s\n", it->second.getTotalTime().c_str());
     } else {
-      return;
-      // Si la tarjeta ya fue 'salida' (no activa), la volvemos a 'entrar'
-      // Reutilizamos el mismo ID de grupo que ya tenía
+      // // Si la tarjeta ya fue 'salida' (no activa), la volvemos a 'entrar'
+      // // Reutilizamos el mismo ID de grupo que ya tenía
       // int existingGroupId = it->second.getGroupId(); // Obtenemos el grupo existente
       // Serial.printf("Tarjeta %s re-leida. Grupo %d. Reiniciando tiempo.\n", it->second.getUid().c_str(), existingGroupId);
       // tarjetasActivas.erase(it); // Eliminar la entrada anterior
       // tarjetasActivas.insert({current_uid, Tarjeta(current_uid, millis(), existingGroupId)}); // Crear nueva entrada con el mismo grupo
-      // dataUpdated = true;
     }
   }
 
-  // Si los datos de las tarjetas han cambiado, enviar por WebSocket
-  if (dataUpdated) {
-    sendWebSocketData();
-  }
+  // Siempre enviar los datos actualizados cuando hay una interacción con la tarjeta
+  sendWebSocketData();
 }

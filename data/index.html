@@ -13,7 +13,6 @@
         tr:nth-child(even) { background-color: #f2f2f2; }
         tr:hover { background-color: #ddd; }
         #status { text-align: center; margin-bottom: 15px; font-weight: bold; color: #555; }
-        /* Media queries para responsividad */
         @media (max-width: 600px) {
             table, thead, tbody, th, td, tr { display: block; }
             thead tr { position: absolute; top: -9999px; left: -9999px; }
@@ -41,6 +40,20 @@
     <script>
         var gateway = `ws://${window.location.hostname}/ws`;
         var websocket;
+        var tarjetasData = []; // Almacenará los datos de las tarjetas
+        
+        // Variables para la sincronización de tiempo
+        var lastEsp32Millis = 0;
+        var lastClientTimestamp = 0; // Date.now() cuando se recibió lastEsp32Millis
+
+        // Función auxiliar para formatear milisegundos a MM:SS
+        function formatMillisToMMSS(millis) {
+            if (millis < 0) millis = 0; // Asegurarse de que no haya tiempos negativos
+            let seconds = Math.floor(millis / 1000);
+            let minutes = Math.floor(seconds / 60);
+            seconds %= 60;
+            return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
 
         function initWebSocket() {
             console.log('Intentando abrir conexión WebSocket...');
@@ -65,34 +78,88 @@
             console.log('Mensaje WebSocket recibido:', event.data);
             document.getElementById('status').innerText = 'Datos actualizados.';
             try {
-                const tarjetas = JSON.parse(event.data);
-                updateTable(tarjetas);
+                const receivedData = JSON.parse(event.data);
+                
+                // Sincronizar timestamps
+                lastEsp32Millis = receivedData.timestampEsp32;
+                lastClientTimestamp = Date.now();
+                
+                // Actualizar tarjetasData
+                // Usamos un Map para un "merge" eficiente y preservar datos si es necesario
+                const updatedTarjetasMap = new Map();
+                if (receivedData.tarjetas) {
+                    receivedData.tarjetas.forEach(card => {
+                        updatedTarjetasMap.set(card.uid, card);
+                    });
+                }
+                
+                tarjetasData = Array.from(updatedTarjetasMap.values());
+                
+                // Las tarjetas ya vienen ordenadas por grupo desde el ESP32
+
+                updateTableDisplay(); // Renderizar la tabla con los nuevos datos
             } catch (e) {
                 console.error("Error al parsear JSON:", e);
             }
         }
 
-        function updateTable(tarjetas) {
+        // Función para actualizar la visualización de la tabla HTML
+        function updateTableDisplay() {
             const tableBody = document.getElementById('cardTableBody');
-            tableBody.innerHTML = '';
+            tableBody.innerHTML = ''; // Limpiar la tabla actual
 
-            if (tarjetas.length === 0) {
+            if (tarjetasData.length === 0) {
                 tableBody.innerHTML = '<tr><td colspan="3" style="text-align: center;">No hay tarjetas activas.</td></tr>';
                 return;
             }
 
-            tarjetas.forEach(tarjeta => {
+            tarjetasData.forEach(tarjeta => {
                 const row = tableBody.insertRow();
                 row.insertCell().setAttribute('data-label', 'UID Tarjeta');
                 row.cells[0].innerText = tarjeta.uid;
-                // Ajustar esta línea para mostrar el grupo
                 row.insertCell().setAttribute('data-label', 'Grupo');
-                row.cells[1].innerText = tarjeta.grupo; // Usamos tarjeta.grupo directamente
-                row.insertCell().setAttribute('data-label', 'Tiempo Total');
-                row.cells[2].innerText = tarjeta.tiempoTotal;
+                row.cells[1].innerText = tarjeta.grupo;
+                const timeCell = row.insertCell(); // Celda para el tiempo
+                timeCell.setAttribute('data-label', 'Tiempo Total');
+                timeCell.id = `time-${tarjeta.uid}`; // Asignar un ID para futuras actualizaciones
+
+                // Mostrar el tiempo inicial basado en si está activa o no
+                if (tarjeta.isActive) {
+                    // Guardar startTime para el cálculo continuo
+                    timeCell.dataset.startTime = tarjeta.startTime;
+                    timeCell.dataset.isActive = 'true';
+                    // Calcular y mostrar el tiempo inicial
+                    const elapsedMillis = (lastClientTimestamp - lastEsp32Millis) + tarjeta.startTime;
+                    timeCell.innerText = formatMillisToMMSS(Date.now() - elapsedMillis); //Tiempo actual - (hora en la que la tarjeta se activo + la diferencia entre la hora que se recibio del esp32 y la hora actual del navegador)
+                } else {
+                    timeCell.dataset.isActive = 'false';
+                    timeCell.innerText = tarjeta.tiempoTotalFormatted; // Mostrar el tiempo finalizado
+                }
             });
         }
 
+        // Temporizador para actualizar los tiempos de las tarjetas activas cada 1 segundo
+        setInterval(() => {
+            tarjetasData.forEach(tarjeta => {
+                if (tarjeta.isActive) {
+                    const timeCell = document.getElementById(`time-${tarjeta.uid}`);
+                    if (timeCell && timeCell.dataset.isActive === 'true') {
+                        const startTimeEsp32 = parseInt(timeCell.dataset.startTime);
+                        
+                        // Calcular el tiempo transcurrido desde que la tarjeta se activó en el ESP32
+                        // relativeMillis = (currentClientTime - lastClientTimestamp) + (lastEsp32Millis - startTimeEsp32)
+                        // Es decir, currentClientTime - (lastClientTimestamp - lastEsp32Millis + startTimeEsp32)
+                        // lastClientTimestamp - lastEsp32Millis es la diferencia entre las dos bases de tiempo
+                        const offset = lastClientTimestamp - lastEsp32Millis;
+                        const currentElapsedMillis = Date.now() - (startTimeEsp32 + offset);
+
+                        timeCell.innerText = formatMillisToMMSS(currentElapsedMillis);
+                    }
+                }
+            });
+        }, 1000); // Actualizar cada 1000 milisegundos (1 segundo)
+
+        // Inicializar la conexión WebSocket al cargar la página
         window.addEventListener('load', initWebSocket, false);
     </script>
 </body>
