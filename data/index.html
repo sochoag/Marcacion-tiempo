@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Control de Tarjetas RFID - Tiempo Real</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        h1 { color: #0056b3; text-align: center; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; background-color: #fff; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #007bff; color: white; }
+        tr:nth-child(even) { background-color: #f2f2f2; }
+        tr:hover { background-color: #ddd; }
+        #status { text-align: center; margin-bottom: 15px; font-weight: bold; color: #555; }
+        /* Media queries para responsividad */
+        @media (max-width: 600px) {
+            table, thead, tbody, th, td, tr { display: block; }
+            thead tr { position: absolute; top: -9999px; left: -9999px; }
+            tr { border: 1px solid #ccc; margin-bottom: 10px; }
+            td { border: none; border-bottom: 1px solid #eee; position: relative; padding-left: 50%; text-align: right; }
+            td:before { position: absolute; top: 6px; left: 6px; width: 45%; padding-right: 10px; white-space: nowrap; content: attr(data-label); font-weight: bold; text-align: left; }
+        }
+    </style>
+</head>
+<body>
+    <h1>Control de Tarjetas RFID - Tiempo Real</h1>
+    <div id="status">Conectando al ESP32...</div>
+    <table>
+        <thead>
+            <tr>
+                <th>UID Tarjeta</th>
+                <th>Grupo</th>
+                <th>Tiempo Total</th>
+            </tr>
+        </thead>
+        <tbody id="cardTableBody">
+            </tbody>
+    </table>
+
+    <script>
+        var gateway = `ws://${window.location.hostname}/ws`;
+        var websocket;
+
+        function initWebSocket() {
+            console.log('Intentando abrir conexión WebSocket...');
+            websocket = new WebSocket(gateway);
+            websocket.onopen = onOpen;
+            websocket.onclose = onClose;
+            websocket.onmessage = onMessage;
+        }
+
+        function onOpen(event) {
+            console.log('Conexión WebSocket abierta');
+            document.getElementById('status').innerText = 'Conectado al ESP32. Esperando datos...';
+        }
+
+        function onClose(event) {
+            console.log('Conexión WebSocket cerrada. Reintentando en 2 segundos...');
+            document.getElementById('status').innerText = 'Desconectado. Reconectando...';
+            setTimeout(initWebSocket, 2000);
+        }
+
+        function onMessage(event) {
+            console.log('Mensaje WebSocket recibido:', event.data);
+            document.getElementById('status').innerText = 'Datos actualizados.';
+            try {
+                const tarjetas = JSON.parse(event.data);
+                updateTable(tarjetas);
+            } catch (e) {
+                console.error("Error al parsear JSON:", e);
+            }
+        }
+
+        function updateTable(tarjetas) {
+            const tableBody = document.getElementById('cardTableBody');
+            tableBody.innerHTML = '';
+
+            if (tarjetas.length === 0) {
+                tableBody.innerHTML = '<tr><td colspan="3" style="text-align: center;">No hay tarjetas activas.</td></tr>';
+                return;
+            }
+
+            tarjetas.forEach(tarjeta => {
+                const row = tableBody.insertRow();
+                row.insertCell().setAttribute('data-label', 'UID Tarjeta');
+                row.cells[0].innerText = tarjeta.uid;
+                // Ajustar esta línea para mostrar el grupo
+                row.insertCell().setAttribute('data-label', 'Grupo');
+                row.cells[1].innerText = tarjeta.grupo; // Usamos tarjeta.grupo directamente
+                row.insertCell().setAttribute('data-label', 'Tiempo Total');
+                row.cells[2].innerText = tarjeta.tiempoTotal;
+            });
+        }
+
+        window.addEventListener('load', initWebSocket, false);
+    </script>
+</body>
+</html>
