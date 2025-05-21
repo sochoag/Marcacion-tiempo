@@ -13,6 +13,21 @@
         tr:nth-child(even) { background-color: #f2f2f2; }
         tr:hover { background-color: #ddd; }
         #status { text-align: center; margin-bottom: 15px; font-weight: bold; color: #555; }
+
+        /* Estilo para tarjetas inactivas */
+        .inactive-card {
+            background-color: #7aaac6 !important; /* Un gris muy claro */
+            color: #000; /* Un gris más oscuro para el texto */
+            font-style: italic; /* Opcional: texto en cursiva */
+        }
+        .inactive-card:hover {
+            background-color: #dee2e6; /* Un gris un poco más oscuro al pasar el mouse */
+        }
+        /* Asegura que el color de texto de las celdas se herede */
+        .inactive-card td {
+            color: inherit;
+        }
+
         @media (max-width: 600px) {
             table, thead, tbody, th, td, tr { display: block; }
             thead tr { position: absolute; top: -9999px; left: -9999px; }
@@ -48,7 +63,7 @@
 
         // Función auxiliar para formatear milisegundos a MM:SS
         function formatMillisToMMSS(millis) {
-            if (millis < 0) millis = 0; // Asegurarse de que no haya tiempos negativos
+            if (millis < 0) millis = 0;
             let seconds = Math.floor(millis / 1000);
             let minutes = Math.floor(seconds / 60);
             seconds %= 60;
@@ -85,7 +100,6 @@
                 lastClientTimestamp = Date.now();
                 
                 // Actualizar tarjetasData
-                // Usamos un Map para un "merge" eficiente y preservar datos si es necesario
                 const updatedTarjetasMap = new Map();
                 if (receivedData.tarjetas) {
                     receivedData.tarjetas.forEach(card => {
@@ -95,8 +109,6 @@
                 
                 tarjetasData = Array.from(updatedTarjetasMap.values());
                 
-                // Las tarjetas ya vienen ordenadas por grupo desde el ESP32
-
                 updateTableDisplay(); // Renderizar la tabla con los nuevos datos
             } catch (e) {
                 console.error("Error al parsear JSON:", e);
@@ -115,6 +127,11 @@
 
             tarjetasData.forEach(tarjeta => {
                 const row = tableBody.insertRow();
+                // AQUI: Añadimos la clase 'inactive-card' si la tarjeta no está activa
+                if (!tarjeta.isActive) {
+                    row.classList.add('inactive-card');
+                }
+
                 row.insertCell().setAttribute('data-label', 'UID Tarjeta');
                 row.cells[0].innerText = tarjeta.uid;
                 row.insertCell().setAttribute('data-label', 'Grupo');
@@ -129,8 +146,9 @@
                     timeCell.dataset.startTime = tarjeta.startTime;
                     timeCell.dataset.isActive = 'true';
                     // Calcular y mostrar el tiempo inicial
-                    const elapsedMillis = (lastClientTimestamp - lastEsp32Millis) + tarjeta.startTime;
-                    timeCell.innerText = formatMillisToMMSS(Date.now() - elapsedMillis); //Tiempo actual - (hora en la que la tarjeta se activo + la diferencia entre la hora que se recibio del esp32 y la hora actual del navegador)
+                    const offset = lastClientTimestamp - lastEsp32Millis;
+                    const elapsedMillis = Date.now() - (tarjeta.startTime + offset);
+                    timeCell.innerText = formatMillisToMMSS(elapsedMillis);
                 } else {
                     timeCell.dataset.isActive = 'false';
                     timeCell.innerText = tarjeta.tiempoTotalFormatted; // Mostrar el tiempo finalizado
@@ -146,10 +164,6 @@
                     if (timeCell && timeCell.dataset.isActive === 'true') {
                         const startTimeEsp32 = parseInt(timeCell.dataset.startTime);
                         
-                        // Calcular el tiempo transcurrido desde que la tarjeta se activó en el ESP32
-                        // relativeMillis = (currentClientTime - lastClientTimestamp) + (lastEsp32Millis - startTimeEsp32)
-                        // Es decir, currentClientTime - (lastClientTimestamp - lastEsp32Millis + startTimeEsp32)
-                        // lastClientTimestamp - lastEsp32Millis es la diferencia entre las dos bases de tiempo
                         const offset = lastClientTimestamp - lastEsp32Millis;
                         const currentElapsedMillis = Date.now() - (startTimeEsp32 + offset);
 
@@ -157,7 +171,7 @@
                     }
                 }
             });
-        }, 1000); // Actualizar cada 1000 milisegundos (1 segundo)
+        }, 100); // Actualizar cada 1000 milisegundos (0.1 segundo)
 
         // Inicializar la conexión WebSocket al cargar la página
         window.addEventListener('load', initWebSocket, false);
