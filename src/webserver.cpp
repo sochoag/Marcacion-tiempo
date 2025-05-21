@@ -5,9 +5,18 @@
 #include <vector>
 #include <algorithm>
 #include <ArduinoJson.h> // Necesario para parsear JSON
+#include <WiFi.h> // Necesario para funciones WiFi.softAP
 
-const char* ssid = "sochoag";       // ¡Reemplaza con tu SSID de WiFi!
-const char* password = "sochoagu"; // ¡Reemplaza con tu contraseña de WiFi!
+// >>> CONFIGURACIÓN PARA ESP32 COMO HOTSPOT (ACCESS POINT) <<<
+// ¡¡¡AJUSTA ESTOS VALORES!!!
+const char* ap_ssid = "ESP32_RFID_AP";     // Nombre de la red Wi-Fi que creará el ESP32
+const char* ap_password = "sochoagu";  // Contraseña para conectarse a la red del ESP32 (mínimo 8 caracteres)
+
+IPAddress ap_local_ip(192, 168, 4, 1);    // IP del ESP32 en modo AP (¡Esta es la IP a la que te conectarás!)
+IPAddress ap_gateway(192, 168, 4, 1);    // Gateway para los clientes (será la misma IP del ESP32)
+IPAddress ap_subnet(255, 255, 255, 0);   // Máscara de subred para la red AP
+// >>> FIN CONFIGURACIÓN HOTSPOT <<<
+
 
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
@@ -51,17 +60,41 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
           }
 
           const char* action = doc["action"];
-          if (action && strcmp(action, "delete") == 0) {
-            const char* uidToDelete = doc["uid"];
-            if (uidToDelete) {
-              Serial.printf("Solicitud de eliminación de tarjeta: %s\n", uidToDelete);
-              removeCardFromMap(uidToDelete); // Eliminar la tarjeta
-              sendWebSocketData(); // Enviar actualización a todos los clientes después de eliminar
+          const char* uid = doc["uid"]; // Ahora también procesamos el UID para "liberate"
+          
+          if (action) {
+            if (strcmp(action, "delete") == 0) {
+              if (uid) {
+                Serial.printf("Solicitud de eliminación de tarjeta: %s\n", uid);
+                removeCardFromMap(uid); // Eliminar la tarjeta
+                sendWebSocketData(); // Enviar actualización a todos los clientes después de eliminar
+              } else {
+                Serial.println("UID de tarjeta no especificado para la acción de eliminación.");
+              }
+            } else if (strcmp(action, "liberate") == 0) { // Manejar la acción de "liberate"
+              if (uid) {
+                // Aquí, en lugar de eliminar, necesitarías una lógica para "liberar" la tarjeta.
+                // Como en el frontend, esto podría implicar marcarla como inactiva/liberada
+                // en el mapa, pero sin borrarla para que persista en el historial.
+                // Si la intención es que el ESP32 olvide completamente esa sesión para que pueda iniciar una nueva,
+                // la acción "delete" ya lo hace. Si "liberate" significa un estado diferente
+                // que el ESP32 debe reconocer (ej. no iniciar un nuevo tiempo si se lee),
+                // necesitarás ajustar la lógica de `Tarjeta` o `utils.cpp`.
+                // Por ahora, y dado que el front-end solo envía "delete" para liberar,
+                // podemos llamar a removeCardFromMap aquí también si esa es la intención del backend.
+                // O si quieres que el ESP32 persista la sesión pero la marque como "liberada",
+                // necesitarías un método en Tarjeta para eso y actualizar el mapa.
+                // Basado en la discusión anterior, "liberar" en el frontend envía "delete" al backend
+                // para que el ESP32 la olvide y pueda crear una nueva sesión si se vuelve a leer.
+                Serial.printf("Solicitud de liberación (eliminar del ESP32): %s\n", uid);
+                removeCardFromMap(uid); 
+                sendWebSocketData(); 
+              } else {
+                Serial.println("UID de tarjeta no especificado para la acción de liberación.");
+              }
             } else {
-              Serial.println("UID de tarjeta no especificado para la acción de eliminación.");
+              Serial.println("Acción desconocida en el mensaje WebSocket.");
             }
-          } else {
-            Serial.println("Acción desconocida en el mensaje WebSocket.");
           }
         }
       }
@@ -81,21 +114,21 @@ void initWebServer(std::map<String, Tarjeta>& tarjetas) {
   }
   Serial.println("SPIFFS montado exitosamente");
 
-  Serial.print("Conectando a WiFi: ");
-  Serial.println(ssid);
-  WiFi.begin(ssid, password);
+  // Configurar el ESP32 en modo Access Point (AP)
+  Serial.print("Configurando ESP32 como Hotspot: ");
+  Serial.println(ap_ssid);
 
-  int retries = 0;
-  while (WiFi.status() != WL_CONNECTED && retries < 40) {
-    delay(500);
-    Serial.print(".");
-    retries++;
-  }
+  // Es buena práctica configurar la IP antes de iniciar el AP
+  // Esto asegura que el AP use la IP que queremos desde el principio
+  WiFi.softAPConfig(ap_local_ip, ap_gateway, ap_subnet);
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWiFi conectado.");
-    Serial.print("Dirección IP: ");
-    Serial.println(WiFi.localIP());
+  // Iniciar el Access Point
+  // WiFi.softAP(ap_ssid, ap_password)
+  if (WiFi.softAP(ap_ssid, ap_password)) {
+    Serial.println("Hotspot AP creado exitosamente.");
+    
+    Serial.print("Dirección IP del Hotspot (Gateway): ");
+    Serial.println(WiFi.softAPIP()); // Esta es la IP a la que te conectarás
 
     ws.onEvent(onWsEvent);
     server.addHandler(&ws);
@@ -109,9 +142,9 @@ void initWebServer(std::map<String, Tarjeta>& tarjetas) {
     });
 
     server.begin();
-    Serial.println("Servidor web iniciado");
+    Serial.println("Servidor web iniciado en el Hotspot");
   } else {
-    Serial.println("\nFallo al conectar a WiFi. Por favor, revisa tu SSID y contraseña.");
+    Serial.println("¡ERROR! Fallo al crear el Hotspot AP. Revisa los parámetros.");
   }
 }
 
